@@ -6,12 +6,12 @@ from psycopg2 import sql
 import psycopg2.extras
 import pytest
 
-from fixtures import CatStream, CONFIG, db_cleanup, InvalidCatStream, MultiTypeStream, NestedStream, TEST_DB
 from target_postgres import json_schema
 from target_postgres import postgres
 from target_postgres import singer_stream
-from target_postgres import main
-from target_postgres.target_tools import TargetError
+from target_postgres.target_tools import stream_to_target, TargetError
+
+from fixtures import CatStream, CONFIG, db_cleanup, InvalidCatStream, MultiTypeStream, NestedStream, TEST_DB
 
 
 ## TODO: create and test more fake streams
@@ -142,15 +142,6 @@ def assert_records(conn, records, table_name, pks, match_pks=False):
                 assert sorted(list(persisted_records.keys())) == sorted(records_pks)
 
 
-def test_loading__invalid__configuration__schema(db_cleanup):
-    stream = CatStream(1)
-    stream.schema = deepcopy(stream.schema)
-    stream.schema['schema']['type'] = 'invalid type for a JSON Schema'
-
-    with pytest.raises(TargetError, match=r'.*invalid JSON Schema instance.*'):
-        main(CONFIG, input_stream=stream)
-
-
 def test_loading__invalid__default_null_value__non_nullable_column(db_cleanup):
     class NullDefaultCatStream(CatStream):
 
@@ -160,14 +151,16 @@ def test_loading__invalid__default_null_value__non_nullable_column(db_cleanup):
             return record
 
     with pytest.raises(postgres.PostgresError, match=r'.*IntegrityError.*'):
-        main(CONFIG, input_stream=NullDefaultCatStream(20))
+        with psycopg2.connect(**TEST_DB) as conn:
+            stream_to_target(NullDefaultCatStream(20), postgres.PostgresTarget(conn))
 
 
 def test_loading__simple(db_cleanup):
     stream = CatStream(100)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             assert_columns_equal(cur,
                                  'cats',
@@ -222,9 +215,9 @@ def test_loading__simple(db_cleanup):
 
 
 def test_loading__nested_tables(db_cleanup):
-    main(CONFIG, input_stream=NestedStream(10))
-
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(NestedStream(10), postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('root'))
             assert 10 == cur.fetchone()[0]
@@ -300,7 +293,9 @@ def test_loading__nested_tables(db_cleanup):
 
 def test_loading__new_non_null_column(db_cleanup):
     cat_count = 50
-    main(CONFIG, input_stream=CatStream(cat_count))
+
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(CatStream(cat_count), postgres.PostgresTarget(conn))
 
     class NonNullStream(CatStream):
         def generate_record(self):
@@ -313,7 +308,8 @@ def test_loading__new_non_null_column(db_cleanup):
     non_null_stream.schema['schema']['properties']['paw_toe_count'] = {'type': 'integer',
                                                                        'default': 5}
 
-    main(CONFIG, input_stream=non_null_stream)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(non_null_stream, postgres.PostgresTarget(conn))
 
     with psycopg2.connect(**TEST_DB) as conn:
         with conn.cursor() as cur:
@@ -352,9 +348,10 @@ def test_loading__new_non_null_column(db_cleanup):
 
 def test_loading__column_type_change(db_cleanup):
     cat_count = 20
-    main(CONFIG, input_stream=CatStream(cat_count))
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(CatStream(cat_count), postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             assert_columns_equal(cur,
                                  'cats',
@@ -395,9 +392,9 @@ def test_loading__column_type_change(db_cleanup):
     stream.schema = deepcopy(stream.schema)
     stream.schema['schema']['properties']['name'] = {'type': 'boolean'}
 
-    main(CONFIG, input_stream=stream)
-
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             assert_columns_equal(cur,
                                  'cats',
@@ -442,9 +439,9 @@ def test_loading__column_type_change(db_cleanup):
     stream.schema = deepcopy(stream.schema)
     stream.schema['schema']['properties']['name'] = {'type': 'integer'}
 
-    main(CONFIG, input_stream=stream)
-
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             assert_columns_equal(cur,
                                  'cats',
@@ -486,9 +483,10 @@ def test_loading__column_type_change(db_cleanup):
 
 def test_loading__column_type_change__nullable(db_cleanup):
     cat_count = 20
-    main(CONFIG, input_stream=CatStream(cat_count))
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(CatStream(cat_count), postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             assert_columns_equal(cur,
                                  'cats',
@@ -530,9 +528,9 @@ def test_loading__column_type_change__nullable(db_cleanup):
     stream.schema['schema']['properties']['name'] = json_schema.make_nullable(
         stream.schema['schema']['properties']['name'])
 
-    main(CONFIG, input_stream=stream)
-
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             assert_columns_equal(cur,
                                  'cats',
@@ -569,9 +567,9 @@ def test_loading__column_type_change__nullable(db_cleanup):
             record['id'] = record['id'] + 2 * cat_count
             return record
 
-    main(CONFIG, input_stream=NameNonNullCatStream(cat_count))
-
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(NameNonNullCatStream(cat_count), postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             assert_columns_equal(cur,
                                  'cats',
@@ -605,9 +603,10 @@ def test_loading__column_type_change__nullable(db_cleanup):
 
 def test_loading__multi_types_columns(db_cleanup):
     stream_count = 50
-    main(CONFIG, input_stream=MultiTypeStream(stream_count))
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(MultiTypeStream(stream_count), postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             assert_columns_equal(cur,
                                  'root',
@@ -655,7 +654,8 @@ def test_loading__invalid__table_name__stream(db_cleanup):
         stream.schema['stream'] = stream_name
 
         with pytest.raises(postgres.PostgresError, match=postgres_error_regex):
-            main(CONFIG, input_stream=stream)
+            with psycopg2.connect(**TEST_DB) as conn:
+                stream_to_target(stream, postgres.PostgresTarget(conn))
 
     invalid_stream_named('', r'.*non empty.*')
     invalid_stream_named('x' * 1000, r'Length.*')
@@ -667,7 +667,8 @@ def test_loading__invalid__table_name__stream(db_cleanup):
     stream.stream = borderline_length_stream_name
     stream.schema = deepcopy(stream.schema)
     stream.schema['stream'] = borderline_length_stream_name
-    main(CONFIG, input_stream=stream)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
 
     stream = CatStream(100, version=10)
     stream.stream = borderline_length_stream_name
@@ -675,7 +676,8 @@ def test_loading__invalid__table_name__stream(db_cleanup):
     stream.schema['stream'] = borderline_length_stream_name
 
     with pytest.raises(postgres.PostgresError, match=r'Length.*'):
-        main(CONFIG, input_stream=stream)
+        with psycopg2.connect(**TEST_DB) as conn:
+            stream_to_target(stream, postgres.PostgresTarget(conn))
 
 
 def test_loading__invalid__table_name__nested(db_cleanup):
@@ -698,7 +700,8 @@ def test_loading__invalid__table_name__nested(db_cleanup):
     stream.schema['schema']['properties']['adoption']['properties'][invalid_name] = \
         stream.schema['schema']['properties']['adoption']['properties'][sub_table_name]
 
-    main(CONFIG, input_stream=stream)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
 
     immunizations_count = stream.immunizations_count
     invalid_name_count = stream.immunizations_count
@@ -721,7 +724,8 @@ def test_loading__invalid__table_name__nested(db_cleanup):
     stream.schema['schema']['properties']['adoption']['properties'][conflicting_name] = \
         stream.schema['schema']['properties']['adoption']['properties'][sub_table_name]
 
-    main(CONFIG, input_stream=stream)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
 
     immunizations_count += stream.immunizations_count
     conflicting_name_count = stream.immunizations_count
@@ -765,49 +769,56 @@ def test_loading__invalid_column_name(db_cleanup):
     non_alphanumeric_stream.schema['schema']['properties']['!!!invalid_name'] = \
         non_alphanumeric_stream.schema['schema']['properties']['age']
 
-    main(CONFIG, input_stream=non_alphanumeric_stream)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(non_alphanumeric_stream, postgres.PostgresTarget(conn))
 
     non_lowercase_stream = CatStream(100)
     non_lowercase_stream.schema = deepcopy(non_lowercase_stream.schema)
     non_lowercase_stream.schema['schema']['properties']['INVALID_name'] = \
         non_lowercase_stream.schema['schema']['properties']['age']
 
-    main(CONFIG, input_stream=non_lowercase_stream)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(non_lowercase_stream, postgres.PostgresTarget(conn))
 
     duplicate_non_lowercase_stream_1 = CatStream(100)
     duplicate_non_lowercase_stream_1.schema = deepcopy(duplicate_non_lowercase_stream_1.schema)
     duplicate_non_lowercase_stream_1.schema['schema']['properties']['invalid!NAME'] = \
         duplicate_non_lowercase_stream_1.schema['schema']['properties']['age']
 
-    main(CONFIG, input_stream=duplicate_non_lowercase_stream_1)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(duplicate_non_lowercase_stream_1, postgres.PostgresTarget(conn))
 
     duplicate_non_lowercase_stream_2 = CatStream(100)
     duplicate_non_lowercase_stream_2.schema = deepcopy(duplicate_non_lowercase_stream_2.schema)
     duplicate_non_lowercase_stream_2.schema['schema']['properties']['invalid#NAME'] = \
         duplicate_non_lowercase_stream_2.schema['schema']['properties']['age']
 
-    main(CONFIG, input_stream=duplicate_non_lowercase_stream_2)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(duplicate_non_lowercase_stream_2, postgres.PostgresTarget(conn))
 
     duplicate_non_lowercase_stream_3 = CatStream(100)
     duplicate_non_lowercase_stream_3.schema = deepcopy(duplicate_non_lowercase_stream_3.schema)
     duplicate_non_lowercase_stream_3.schema['schema']['properties']['invalid%NAmE'] = \
         duplicate_non_lowercase_stream_3.schema['schema']['properties']['age']
 
-    main(CONFIG, input_stream=duplicate_non_lowercase_stream_3)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(duplicate_non_lowercase_stream_3, postgres.PostgresTarget(conn))
 
     name_too_long_stream = CatStream(100)
     name_too_long_stream.schema = deepcopy(name_too_long_stream.schema)
     name_too_long_stream.schema['schema']['properties']['x' * 1000] = \
         name_too_long_stream.schema['schema']['properties']['age']
 
-    main(CONFIG, input_stream=name_too_long_stream)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(name_too_long_stream, postgres.PostgresTarget(conn))
 
     duplicate_name_too_long_stream = CatStream(100)
     duplicate_name_too_long_stream.schema = deepcopy(duplicate_name_too_long_stream.schema)
     duplicate_name_too_long_stream.schema['schema']['properties']['x' * 100] = \
         duplicate_name_too_long_stream.schema['schema']['properties']['age']
 
-    main(CONFIG, input_stream=duplicate_name_too_long_stream)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(duplicate_name_too_long_stream, postgres.PostgresTarget(conn))
 
     with psycopg2.connect(**TEST_DB) as conn:
         with conn.cursor() as cur:
@@ -838,13 +849,16 @@ def test_loading__invalid_column_name(db_cleanup):
 
 
 def test_loading__invalid_column_name__duplicate_name_handling(db_cleanup):
-    for i in range(101):
-        name_too_long_stream = CatStream(100)
-        name_too_long_stream.schema = deepcopy(name_too_long_stream.schema)
-        name_too_long_stream.schema['schema']['properties']['x' * (100 + i)] = \
-            name_too_long_stream.schema['schema']['properties']['age']
+    with psycopg2.connect(**TEST_DB) as conn:
+        target = postgres.PostgresTarget(conn)
 
-        main(CONFIG, input_stream=name_too_long_stream)
+        for i in range(101):
+            name_too_long_stream = CatStream(100)
+            name_too_long_stream.schema = deepcopy(name_too_long_stream.schema)
+            name_too_long_stream.schema['schema']['properties']['x' * (100 + i)] = \
+                name_too_long_stream.schema['schema']['properties']['age']
+
+            stream_to_target(name_too_long_stream, target)
 
     expected_columns = {
         ('_sdc_batched_at', 'timestamp with time zone', 'YES'),
@@ -882,9 +896,9 @@ def test_loading__invalid_column_name__column_type_change(db_cleanup):
     stream.schema['schema']['properties'][invalid_column_name] = \
         stream.schema['schema']['properties']['paw_colour']
 
-    main(CONFIG, input_stream=stream)
-
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             assert_columns_equal(cur,
                                  'cats',
@@ -926,9 +940,9 @@ def test_loading__invalid_column_name__column_type_change(db_cleanup):
     stream.schema = deepcopy(stream.schema)
     stream.schema['schema']['properties'][invalid_column_name] = {'type': 'boolean'}
 
-    main(CONFIG, input_stream=stream)
-
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             assert_columns_equal(cur,
                                  'cats',
@@ -974,9 +988,9 @@ def test_loading__invalid_column_name__column_type_change(db_cleanup):
     stream.schema = deepcopy(stream.schema)
     stream.schema['schema']['properties'][invalid_column_name] = {'type': 'integer'}
 
-    main(CONFIG, input_stream=stream)
-
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             assert_columns_equal(cur,
                                  'cats',
@@ -1022,17 +1036,20 @@ def test_loading__column_type_change__pks__same_resulting_type(db_cleanup):
     stream.schema = deepcopy(stream.schema)
     stream.schema['schema']['properties']['id'] = {'type': ['integer', 'null']}
 
-    main(CONFIG, input_stream=stream)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
 
     stream = CatStream(20)
     stream.schema = deepcopy(stream.schema)
     stream.schema['schema']['properties']['id'] = {'type': ['null', 'integer']}
 
-    main(CONFIG, input_stream=stream)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
 
 
 def test_loading__invalid__column_type_change__pks(db_cleanup):
-    main(CONFIG, input_stream=CatStream(20))
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(CatStream(20), postgres.PostgresTarget(conn))
 
     class StringIdCatStream(CatStream):
         def generate_record(self):
@@ -1045,43 +1062,49 @@ def test_loading__invalid__column_type_change__pks(db_cleanup):
     stream.schema['schema']['properties']['id'] = {'type': 'string'}
 
     with pytest.raises(postgres.PostgresError, match=r'.*key_properties. type change detected'):
-        main(CONFIG, input_stream=stream)
+        with psycopg2.connect(**TEST_DB) as conn:
+            stream_to_target(stream, postgres.PostgresTarget(conn))
 
 
 def test_loading__invalid__column_type_change__pks__nullable(db_cleanup):
-    main(CONFIG, input_stream=CatStream(20))
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(CatStream(20), postgres.PostgresTarget(conn))
 
     stream = CatStream(20)
     stream.schema = deepcopy(stream.schema)
     stream.schema['schema']['properties']['id'] = json_schema.make_nullable(stream.schema['schema']['properties']['id'])
 
     with pytest.raises(postgres.PostgresError, match=r'.*key_properties. type change detected'):
-        main(CONFIG, input_stream=stream)
+        with psycopg2.connect(**TEST_DB) as conn:
+            stream_to_target(stream, postgres.PostgresTarget(conn))
 
 
 def test_upsert(db_cleanup):
     stream = CatStream(100)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             assert cur.fetchone()[0] == 100
         assert_records(conn, stream.records, 'cats', 'id')
 
     stream = CatStream(100)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             assert cur.fetchone()[0] == 100
         assert_records(conn, stream.records, 'cats', 'id')
 
     stream = CatStream(200)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             assert cur.fetchone()[0] == 200
@@ -1090,7 +1113,8 @@ def test_upsert(db_cleanup):
 
 def test_upsert__invalid__primary_key_change(db_cleanup):
     stream = CatStream(100)
-    main(CONFIG, input_stream=stream)
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
 
     stream = CatStream(100)
     schema = deepcopy(stream.schema)
@@ -1098,23 +1122,26 @@ def test_upsert__invalid__primary_key_change(db_cleanup):
     stream.schema = schema
 
     with pytest.raises(postgres.PostgresError, match=r'.*key_properties.*'):
-        main(CONFIG, input_stream=stream)
+        with psycopg2.connect(**TEST_DB) as conn:
+            stream_to_target(stream, postgres.PostgresTarget(conn))
 
 
 def test_nested_delete_on_parent(db_cleanup):
     stream = CatStream(100, nested_count=3)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats__adoption__immunizations'))
             high_nested = cur.fetchone()[0]
         assert_records(conn, stream.records, 'cats', 'id')
 
     stream = CatStream(100, nested_count=2)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats__adoption__immunizations'))
             low_nested = cur.fetchone()[0]
@@ -1125,9 +1152,10 @@ def test_nested_delete_on_parent(db_cleanup):
 
 def test_full_table_replication(db_cleanup):
     stream = CatStream(110, version=0, nested_count=3)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             version_0_count = cur.fetchone()[0]
@@ -1139,9 +1167,10 @@ def test_full_table_replication(db_cleanup):
     assert version_0_sub_count == 330
 
     stream = CatStream(100, version=1, nested_count=3)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             version_1_count = cur.fetchone()[0]
@@ -1153,9 +1182,10 @@ def test_full_table_replication(db_cleanup):
     assert version_1_sub_count == 300
 
     stream = CatStream(120, version=2, nested_count=2)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             version_2_count = cur.fetchone()[0]
@@ -1168,9 +1198,10 @@ def test_full_table_replication(db_cleanup):
 
     ## Test that an outdated version cannot overwrite
     stream = CatStream(314, version=1, nested_count=2)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             older_version_count = cur.fetchone()[0]
@@ -1180,9 +1211,10 @@ def test_full_table_replication(db_cleanup):
 
 def test_deduplication_newer_rows(db_cleanup):
     stream = CatStream(100, nested_count=3, duplicates=2)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             table_count = cur.fetchone()[0]
@@ -1203,9 +1235,10 @@ def test_deduplication_newer_rows(db_cleanup):
 
 def test_deduplication_older_rows(db_cleanup):
     stream = CatStream(100, nested_count=2, duplicates=2, duplicate_sequence_delta=-100)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             table_count = cur.fetchone()[0]
@@ -1226,16 +1259,18 @@ def test_deduplication_older_rows(db_cleanup):
 
 def test_deduplication_existing_new_rows(db_cleanup):
     stream = CatStream(100, nested_count=2)
-    main(CONFIG, input_stream=stream)
+
+    with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
 
     original_sequence = stream.sequence
-
     stream = CatStream(100,
                        nested_count=2,
                        sequence=original_sequence - 20)
-    main(CONFIG, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             table_count = cur.fetchone()[0]
@@ -1258,9 +1293,10 @@ def test_multiple_batches_upsert(db_cleanup):
     config['batch_detection_threshold'] = 5
 
     stream = CatStream(100, nested_count=2)
-    main(config, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             assert cur.fetchone()[0] == 100
@@ -1269,9 +1305,10 @@ def test_multiple_batches_upsert(db_cleanup):
         assert_records(conn, stream.records, 'cats', 'id')
 
     stream = CatStream(100, nested_count=3)
-    main(config, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             assert cur.fetchone()[0] == 100
@@ -1286,9 +1323,10 @@ def test_multiple_batches_by_memory_upsert(db_cleanup):
     config['batch_detection_threshold'] = 5
 
     stream = CatStream(100, nested_count=2)
-    main(config, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             assert cur.fetchone()[0] == 100
@@ -1297,9 +1335,10 @@ def test_multiple_batches_by_memory_upsert(db_cleanup):
         assert_records(conn, stream.records, 'cats', 'id')
 
     stream = CatStream(100, nested_count=3)
-    main(config, input_stream=stream)
 
     with psycopg2.connect(**TEST_DB) as conn:
+        stream_to_target(stream, postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             cur.execute(get_count_sql('cats'))
             assert cur.fetchone()[0] == 100

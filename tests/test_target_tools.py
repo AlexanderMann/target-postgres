@@ -7,7 +7,7 @@ from target_postgres import singer_stream
 from target_postgres import target_tools
 from target_postgres.sql_base import SQLInterface
 
-from fixtures import CONFIG, InvalidCatStream
+from fixtures import CatStream, CONFIG, InvalidCatStream
 
 
 class Target(SQLInterface):
@@ -70,3 +70,12 @@ def test_loading__invalid__records__threshold():
         target_tools.stream_to_target(InvalidCatStream(20), target, config=config)
 
     assert len(target.calls['write_batch']) == 0
+
+
+def test_loading__invalid__configuration__schema():
+    stream = CatStream(1)
+    stream.schema = deepcopy(stream.schema)
+    stream.schema['schema']['type'] = 'invalid type for a JSON Schema'
+
+    with pytest.raises(target_tools.TargetError, match=r'.*invalid JSON Schema instance.*'):
+        target_tools.stream_to_target(stream, None)

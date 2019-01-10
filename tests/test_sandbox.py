@@ -4,8 +4,10 @@ import psycopg2
 import psycopg2.extras
 import pytest
 
-from fixtures import CONFIG, db_cleanup, TEST_DB
-from target_postgres import main
+from target_postgres import postgres
+from target_postgres.target_tools import stream_to_target
+
+from fixtures import db_cleanup, TEST_DB
 
 
 def assert_tables_equal(cursor, expected_table_names):
@@ -330,9 +332,10 @@ class BigCommerceStream:
 
 
 def test_bigcommerce__sandbox(db_cleanup):
-    main(CONFIG, input_stream=BigCommerceStream())
-
     with psycopg2.connect(**TEST_DB) as conn:
+        with psycopg2.connect(**TEST_DB) as conn:
+            stream_to_target(BigCommerceStream(), postgres.PostgresTarget(conn))
+
         with conn.cursor() as cur:
             assert_tables_equal(cur,
                                 {'products',
