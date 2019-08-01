@@ -9,8 +9,8 @@ from singer import utils, metadata, metrics
 
 from target_postgres.globals import LOGGER
 from target_postgres.pipes.batch import batch
-from target_postgres.pipes.sql_flatten import flatten
 from target_postgres.pipes.load import load
+from target_postgres.pipes.sql_flatten import flatten
 
 
 def main(target):
@@ -24,37 +24,6 @@ def main(target):
     stream_to_target(input_stream, target, config=config)
 
     return None
-
-
-class BatchStreamBufferAdapter:
-    def __init__(self, batch):
-        self._batch = batch
-
-    @property
-    def count(self):
-        return len(self.get_batch())
-
-    @property
-    def key_properties(self):
-        return self._batch['key_properties']
-
-    @property
-    def max_version(self):
-        return self._batch['max_version']
-
-    @property
-    def schema(self):
-        return self._batch['schema']
-
-    @property
-    def stream(self):
-        return self._batch['stream']
-
-    def get_batch(self):
-        return self._batch['records']
-
-    def peek_buffer(self):
-        return self._batch['records']
 
 
 def stream_to_target(stream, target, config={}):
