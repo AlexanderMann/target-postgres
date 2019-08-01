@@ -115,9 +115,9 @@ _The above is copied from the [current list of versions](https://www.postgresql.
     - `['number']`
     - `['string']`
     - `['string', 'null']`
-  - Exmaple of JSON Schema types that **DO NOT** work
     - `['string', 'integer']`
     - `['integer', 'number']`
+  - Exmaple of JSON Schema types that **DO NOT** work
     - `['any']`
     - `['null']`
 - JSON Schema combinations such as `anyOf` and `allOf` are not supported.
